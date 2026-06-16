@@ -33,10 +33,10 @@ Each instance runs under its own `HOME` directory at `~/MEGA/<name>/`, with sepa
 
 The script **auto-detects your init system** and uses the best autostart method:
 
-| Init system                | Autostart method                                             | Desktop environments                                  |
-| -------------------------- | ------------------------------------------------------------ | ----------------------------------------------------- |
-| **systemd** (detected)     | Per-instance systemd user services at `~/.config/systemd/user/megasync-<name>.service` | KDE 6, GNOME, modern distros                          |
-| **non-systemd** (fallback) | Wrapper script + `.desktop` entry in `~/.config/autostart/`  | Devuan, Alpine, Gentoo (OpenRC), Artix, Void (runit)… |
+| Init system | Autostart method | Desktop environments |
+|---|---|---|
+| **systemd** (detected) | Per-instance systemd user services at `~/.config/systemd/user/megasync-<name>.service` | KDE 6, GNOME, modern distros |
+| **non-systemd** (fallback) | Wrapper script + `.desktop` entry in `~/.config/autostart/` | Devuan, Alpine, Gentoo (OpenRC), Artix, Void (runit)… |
 
 ### systemd method (v2.0+)
 
@@ -63,7 +63,6 @@ killall megasync
 #### Disable autostart and remove scripts
 
 **systemd:**
-
 ```bash
 for svc in ~/.config/systemd/user/megasync-*.service; do
     name=$(basename "$svc" .service)
@@ -74,14 +73,12 @@ systemctl --user daemon-reload
 ```
 
 **non-systemd:**
-
 ```bash
 rm ~/.config/autostart/mega_instances.desktop
 rm ~/.local/bin/megasync-instances-launcher.sh
 ```
 
 **Both:**
-
 ```bash
 rm ~/.config/megasync-instances/status
 sudo rm /usr/bin/megasync-instances
@@ -101,7 +98,6 @@ rm -rf ~/MEGA/*
 ## Changelog
 
 ### v2.0 — KDE 6 / Wayland + non-systemd support
-
 - **systemd**: Generate per-instance systemd user services; cold-boot safe
 - **non-systemd**: Legacy wrapper + .desktop autostart preserved
 - Auto-detects init system at runtime
@@ -109,7 +105,6 @@ rm -rf ~/MEGA/*
 - KDE globals symlink for correct theming in isolated environments
 
 ### v1.0 — Original release
-
 - Interactive setup with zenity dialogs
 - Wrapper script launches all instances at boot
 - Works on KDE 5 / X11 and non-systemd distros
