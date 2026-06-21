@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================
-#  MEGA-Instances v2.0 — Multi-instance MEGAsync for Linux
+#  MEGA-Instances v2.1 — Multi-instance MEGAsync for Linux
 #  https://github.com/NicoVarg99/MEGA-Instances
 #
 #  Runs multiple MEGAsync instances side-by-side, each with
@@ -15,7 +15,7 @@
 # ============================================================
 
 # ── Configuration ───────────────────────────────────────────
-VERSION="2.0"
+VERSION="2.1"
 REALHOME="$HOME"
 MEGADIR="MEGA"
 STATUS_DIR="$REALHOME/.config/megasync-instances"
@@ -68,9 +68,15 @@ launchInstance() {
 
 generateService() {
     local name="$1"
+    local prev_name="$2"          # empty for the first instance
+    local index="$3"              # 1-based index for staggering
     local home_dir="$REALHOME/$MEGADIR/$name"
     local unit_name="megasync-${name}.service"
     local file="$SYSTEMD_USER_DIR/$unit_name"
+    local after="After=graphical-session.target network-online.target"
+    local sleep_sec=$(( index * 2 ))
+
+    [ -n "$prev_name" ] && after="$after megasync-${prev_name}.service"
 
     mkdir -p "$SYSTEMD_USER_DIR"
 
@@ -79,11 +85,11 @@ generateService() {
 Description=MEGAsync Instance - ${name}
 Documentation=https://github.com/NicoVarg99/MEGA-Instances
 PartOf=graphical-session.target
-After=graphical-session.target network-online.target
+${after}
 
 [Service]
 Type=simple
-ExecStartPre=/bin/sleep 2
+ExecStartPre=/bin/sleep ${sleep_sec}
 ExecStart=/usr/bin/megasync
 Environment=HOME=${home_dir}
 Environment=XDG_DATA_HOME=${home_dir}/.local/share
@@ -182,6 +188,110 @@ startAllWrapper() {
     fi
 }
 
+# ── Repair mode (detect & fix config issues) ──────────────
+frepair() {
+    log "Repair mode — scanning instance configs..."
+    local fixed=0
+    local found=0
+
+    for d in "$REALHOME/$MEGADIR"/*/; do
+        [ -d "$d" ] || continue
+        local cfg="$d/.local/share/data/Mega Limited/MEGAsync/MEGAsync.cfg"
+        [ -f "$cfg" ] || continue
+
+        local name
+        name=$(basename "$d")
+        log "  Checking $name..."
+
+        # Read config, identify account sub-sections (non-[General])
+        local sections=()
+        local current_section=""
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^\[([^\]]+)\]$ ]]; then
+                current_section="${BASH_REMATCH[1]}"
+                sections+=("$current_section")
+            fi
+        done < "$cfg"
+
+        # Find account sub-sections (anything other than General)
+        local account_sections=()
+        for s in "${sections[@]}"; do
+            [ "$s" = "General" ] && continue
+            account_sections+=("$s")
+        done
+
+        if [ ${#account_sections[@]} -le 1 ]; then
+            log "    OK (${#account_sections[@]} account section(s))"
+            continue
+        fi
+
+        # Multiple account sections — find which one has a session key
+        local session_section=""
+        local ghost_sections=()
+        for s in "${account_sections[@]}"; do
+            # Read keys in this section to find a session (40-char hex key)
+            local in_section=false
+            local has_session=false
+            while IFS= read -r line; do
+                if [[ "$line" =~ ^\[$s\]$ ]]; then
+                    in_section=true
+                    continue
+                fi
+                if $in_section && [[ "$line" =~ ^\[ ]]; then
+                    break
+                fi
+                if $in_section && [[ "$line" =~ ^[a-f0-9]{40}= ]]; then
+                    # 40-char hex key with a non-empty value = likely session
+                    local val
+                    val=$(echo "$line" | cut -d= -f2-)
+                    [ -n "$val" ] && has_session=true
+                fi
+            done < "$cfg"
+            if $has_session; then
+                session_section="$s"
+            else
+                ghost_sections+=("$s")
+            fi
+        done
+
+        if [ ${#ghost_sections[@]} -eq 0 ]; then
+            log "    Multiple sections but all have sessions — skipping"
+            continue
+        fi
+
+        found=$((found + 1))
+        log "    Found ${#ghost_sections[@]} ghost section(s) without session keys"
+
+        # Remove ghost sections
+        local tmp="${cfg}.repair"
+        local in_ghost=false
+        while IFS= read -r line; do
+            local stripped
+            stripped=$(echo "$line" | sed 's/^[[:space:]]*//')
+            if [[ "$stripped" =~ ^\[([^\]]+)\]$ ]]; then
+                local sec_name="${BASH_REMATCH[1]}"
+                in_ghost=false
+                for g in "${ghost_sections[@]}"; do
+                    [ "$sec_name" = "$g" ] && in_ghost=true && break
+                done
+            fi
+            if ! $in_ghost; then
+                echo "$line" >> "$tmp"
+            fi
+        done < "$cfg"
+
+        mv "$tmp" "$cfg"
+        fixed=$((fixed + 1))
+        log "    ✓ Repaired: removed ${#ghost_sections[@]} ghost section(s) from $name"
+    done
+
+    if [ $found -eq 0 ]; then
+        log "All instances look clean — no duplicate account sections found."
+    else
+        log "Repaired $fixed instance(s). Run again to verify."
+    fi
+}
+
 # ── First-time configuration ──────────────────────────────
 finstall() {
     checkDep zenity
@@ -259,9 +369,12 @@ frun() {
 
         # Generate autostart mechanism
         if $HAS_SYSTEMD; then
-            # Generate and enable systemd services
-            for name in "${ARRAY[@]}"; do
-                generateService "$name"
+            # Generate and enable systemd services (chained in entry order)
+            prev_name=""
+            for (( idx=0; idx<INSTNUM; idx++ )); do
+                local name="${ARRAY[$idx]}"
+                generateService "$name" "$prev_name" $(( idx + 1 ))
+                prev_name="$name"
             done
             systemctl --user daemon-reload
             for name in "${ARRAY[@]}"; do
@@ -287,6 +400,23 @@ frun() {
 }
 
 # ── Entry point ───────────────────────────────────────────
+case "${1:-}" in
+    --repair|-r)
+        mkdir -p "$STATUS_DIR"
+        frepair
+        exit 0
+        ;;
+    --help|-h)
+        echo "MEGA-Instances v${VERSION}"
+        echo "Usage: $0 [--repair]"
+        echo ""
+        echo "  (no args)  Run setup or launch configured instances"
+        echo "  --repair   Scan configs for duplicate account entries and fix them"
+        echo "  --help     Show this help"
+        exit 0
+        ;;
+esac
+
 mkdir -p "$STATUS_DIR"
 
 if ! $HAS_SYSTEMD; then

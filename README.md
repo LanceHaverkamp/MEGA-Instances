@@ -31,7 +31,7 @@ After that, your instances are configured for autostart.
 
 Each instance runs under its own `HOME` directory at `~/MEGA/<name>/`, with separate `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, and `XDG_CACHE_HOME`. This keeps config files, sessions, and sync state completely isolated.
 
-The script **auto-detects your init system** and uses the best autostart method:
+The script **auto-detects your init system** and uses the best autostart method. Services are generated in the order you entered the instance names — the first name you enter starts first (shortest delay), and each subsequent instance waits for the previous one to start.
 
 | Init system | Autostart method | Desktop environments |
 |---|---|---|
@@ -40,13 +40,23 @@ The script **auto-detects your init system** and uses the best autostart method:
 
 ### systemd method (v2.0+)
 
-Each service sets the isolated environment via `Environment=` directives, starts after `graphical-session.target` and `network-online.target`, and is enabled for `graphical-session.target`. Instances start one at a time and survive cold boots reliably — no race conditions, no lost sessions.
+Each service sets the isolated environment via `Environment=` directives, starts after `graphical-session.target` and `network-online.target`, and is enabled for `graphical-session.target`. Instances are chained — the first starts after a 2-second sleep, the second after 4 seconds (and waits for the first), the third after 6 seconds, etc. This avoids race conditions and survives cold boots reliably.
 
 This was the critical fix for KDE 6 / Wayland, where the old wrapper-script approach caused sessions to be invalidated after every cold boot.
 
 ### Non-systemd method (legacy)
 
 A wrapper script launches each instance with `&` and a brief delay. A `.desktop` file in `~/.config/autostart/` ensures they start with your desktop session.
+
+## Repair mode
+
+If an instance asks you to log in repeatedly on every boot, the MEGAsync config file may have developed duplicate account entries (a known MEGA client quirk where email capitalization differs between successive logins). Run:
+
+```bash
+megasync-instances --repair
+```
+
+This scans each instance's config, removes any account sections without session keys (ghost entries), and keeps the working session intact. No data is lost — only stale login clutter is cleaned up.
 
 ## Uninstallation
 
@@ -96,6 +106,11 @@ rm -rf ~/MEGA/*
 ![File manager](img/file-manager.png?raw=true "File manager")
 
 ## Changelog
+
+### v2.1 — Service chaining + repair mode
+- **Service chaining**: systemd services now start in entry order — each waits for the previous one with a staggered delay (2s, 4s, 6s…)
+- **Repair mode**: `megasync-instances --repair` scans for and removes duplicate account entries caused by MEGA's email capitalization inconsistency
+- Fixes an issue where successive logins with different email casing (e.g. `User@...` vs `user@...`) could leave ghost sections in the config, breaking session persistence
 
 ### v2.0 — KDE 6 / Wayland + non-systemd support
 - **systemd**: Generate per-instance systemd user services; cold-boot safe
